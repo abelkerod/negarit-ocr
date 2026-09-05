@@ -119,6 +119,18 @@ def main():
     r = extract("transaction number is DHO742176X.", "telebirr")
     check("telebirr: a token no flip can restore is not offered", r["reference"], None)
 
+    # The check digit covers the counter, not the three date characters before
+    # it, so an S read for the 5 of the fifth passes every other test and names
+    # a day three weeks out. This one cost a failed verification on staging.
+    r = extract("transaction number is DIS5HC9VPL.", "telebirr")
+    check("telebirr: a receipt is not issued for a day that has not happened",
+          r["reference"], "DI55HC9VPL")
+    r = extract("https://transactioninfo.ethiotelecom.et/receipt/DIS5HC9VPL", "telebirr")
+    check("telebirr: the same in a link", r["reference"],
+          "https://transactioninfo.ethiotelecom.et/receipt/DI55HC9VPL")
+    r = extract("transaction number is DHT09Z7NCY.", "telebirr")
+    check("telebirr: an older receipt is left alone", r["reference"], "DHT09Z7NCY")
+
     # A QR payload arrives as its own line and needs no joining.
     r = extract("https://mbreciept.cbe.com.et/v2-hfHCxGxdqOQNRK57GBpT", "cbe")
     check("a QR link is taken whole",

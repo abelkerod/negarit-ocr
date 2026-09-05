@@ -135,7 +135,24 @@ def repair_telebirr_link(url: str) -> str:
         return url
     fixed = repair_telebirr(m.group(1).upper())
     best = repair_telebirr_checksum(fixed)
-    return TB_CANONICAL + (best[0] if best else fixed)
+    settled = repair_telebirr_date(best[0] if best else fixed)
+    return TB_CANONICAL + (settled or fixed)
+
+
+def telebirr_date(token: str) -> datetime.date | None:
+    """The date a token opens with, or None if those three characters cannot be one."""
+    if len(token) != 10 or token[1] not in TELEBIRR_MONTHS or token[2] not in TELEBIRR_DAYS[1:]:
+        return None
+    month = TELEBIRR_MONTHS.index(token[1]) + 1
+    day = TELEBIRR_DAYS.index(token[2])
+    if day > DAYS_IN_MONTH[month - 1]:
+        return None
+    # C is 2025 and D is 2026, so the letters walk forward one year at a time.
+    year = 2025 + (ord(token[0]) - ord("C"))
+    try:
+        return datetime.date(year, month, day)
+    except ValueError:
+        return None
 
 
 def plausible_telebirr(token: str) -> bool:
@@ -143,9 +160,32 @@ def plausible_telebirr(token: str) -> bool:
         return True  # 12- and 16-character forms exist; only the common one is pinned down
     if not all(c in allowed for c, allowed in zip(token, TELEBIRR_POSITIONS)):
         return False
-    # The date it opens with has to be one that happened.
-    month = TELEBIRR_MONTHS.index(token[1]) + 1
-    return TELEBIRR_DAYS.index(token[2]) <= DAYS_IN_MONTH[month - 1]
+    on = telebirr_date(token)
+    if on is None:
+        return False
+    # A receipt is not issued for a day that has not happened. One day of
+    # slack because the phone is on UTC+3 and we are not.
+    return on <= datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=1)
+
+
+def repair_telebirr_date(token: str) -> str | None:
+    """Fix a date the reader put in the future.
+
+    The check digit covers the counter, not the three characters before it, so
+    an S read for the 5 of the fifth is a token that passes every other test
+    and names a day three weeks out. Both are legal day characters, so only the
+    calendar says which was meant.
+    """
+    if plausible_telebirr(token):
+        return token
+    for i in (2, 1, 0):
+        swap = CONFUSABLE.get(token[i])
+        if not swap:
+            continue
+        candidate = token[:i] + swap + token[i + 1:]
+        if plausible_telebirr(candidate):
+            return candidate
+    return None
 
 
 def plausible_cbe(token: str) -> bool:
@@ -177,6 +217,7 @@ PROVIDERS = {
         "valid": plausible_cbe,
         "repair": repair_cbe,
         "checksum": None,
+        "dated": None,
         "repair_link": None,
         "prefer": lambda t: len(t) == 12,
         "link": lambda host: host == "mbreciept.cbe.com.et",
@@ -192,6 +233,7 @@ PROVIDERS = {
         "valid": plausible_telebirr,
         "repair": repair_telebirr,
         "checksum": repair_telebirr_checksum,
+        "dated": repair_telebirr_date,
         "repair_link": repair_telebirr_link,
         "prefer": None,
         "token_is_evidence": True,
@@ -255,6 +297,11 @@ def extract(text: str, provider: str) -> dict:
             if not fixed:
                 continue  # the check says this was misread and no flip restores it
             tok = fixed[0]
+        if spec.get("dated"):
+            corrected = spec["dated"](tok)
+            if not corrected:
+                continue  # names a day that has not happened, and no flip fixes it
+            tok = corrected
         if tok in tokens:
             continue
         if spec.get("valid") and not spec["valid"](tok):
