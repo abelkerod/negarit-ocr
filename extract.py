@@ -14,6 +14,7 @@ This mirrors Negarit's shared/extract-reference.ts. The two are separate
 implementations of one grammar and will drift if only one is changed; the
 fixtures in test_extract.py are the cheapest place to notice.
 """
+import datetime
 import re
 
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
@@ -21,10 +22,32 @@ URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 # one no sentence starts with. Real CBE receipts wrap mid-token exactly here.
 CONTINUATION = re.compile(r"\n(?:([\w\-.~%/?=&#:]+)(?=\n|$)|([\-._/?=&%~][\w\-.~%/?=&#:]*))")
 
+def plausible_cbe(token: str) -> bool:
+    """The five digits after FT are a date, not a serial.
+
+    CBE runs Temenos T24, where an FT reference is FT + two-digit year + day of
+    year. Every real receipt we hold decodes to the date printed on its own
+    face. So a day outside 1-366 is not a reference that failed to verify, it is
+    a misread: O in a digit slot, or a dropped character shifting the rest left.
+    Rejecting it here costs a lookup we would have spent to learn the same thing.
+    """
+    year, day = int(token[2:4]), int(token[4:7])
+    if not 1 <= day <= 366:
+        return False
+    if day == 366:  # only a leap year has one
+        y = 2000 + year
+        return y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+    return True
+
+
 PROVIDERS = {
-    # FT + YYDDD + 4-6 alnum, e.g. FT25123ABC45.
+    # FT + YY + DDD (day of year) + a tail. Every real receipt we hold has a
+    # five-character tail; the wider 4-6 is kept because the sample is small,
+    # but a five is preferred over a four or six when both are on offer.
     "cbe": {
         "token": re.compile(r"\bFT\d{5}[A-Z0-9]{4,6}\b"),
+        "valid": plausible_cbe,
+        "prefer": lambda t: len(t) == 12,
         "link": lambda host: host == "mbreciept.cbe.com.et",
         # CBE retired the host these key, so they are named but never offered.
         "legacy": lambda host: host == "cbe.com.et" or host.endswith(".cbe.com.et"),
@@ -35,6 +58,8 @@ PROVIDERS = {
         "token": re.compile(r"\b(?=[A-Z0-9]{10}\b)(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{10}\b"),
         "link": lambda host: host.endswith("ethiotelecom.et"),
         "legacy": None,
+        "valid": None,
+        "prefer": None,
         "token_is_evidence": True,
     },
 }
@@ -85,8 +110,13 @@ def extract(text: str, provider: str) -> dict:
 
     tokens = []
     for tok in spec["token"].findall(normalize(joined)):
-        if tok not in tokens:
-            tokens.append(tok)
+        if tok in tokens:
+            continue
+        if spec.get("valid") and not spec["valid"](tok):
+            continue  # structurally impossible, so a misread rather than a miss
+        tokens.append(tok)
+    if spec.get("prefer"):
+        tokens.sort(key=lambda t: not spec["prefer"](t))
 
     reference = links[0] if links else (tokens[0] if spec["token_is_evidence"] and tokens else None)
     return {"links": links, "tokens": tokens, "legacy": legacy, "reference": reference}

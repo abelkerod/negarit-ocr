@@ -59,6 +59,21 @@ def main():
           join_wrapped_urls("see https://example.com/a and stop"),
           "see https://example.com/a and stop")
 
+    # The five digits after FT are a day of year, so a misread that puts a
+    # letter or an impossible day there is structurally not a reference.
+    r = extract("Ref FT26999ABCDE transferred", "cbe")
+    check("cbe: day 999 is a misread, not a reference", r["tokens"], [])
+    r = extract("Ref FT26000ABCDE transferred", "cbe")
+    check("cbe: day 000 is a misread too", r["tokens"], [])
+    r = extract("Ref FT26236DZD16 transferred", "cbe")
+    check("cbe: a real day of year survives", r["tokens"], ["FT26236DZD16"])
+    r = extract("Ref FT27366ABCDE transferred", "cbe")
+    check("cbe: day 366 needs a leap year", r["tokens"], [])
+    r = extract("Ref FT28366ABCDE transferred", "cbe")
+    check("cbe: 2028 has one", r["tokens"], ["FT28366ABCDE"])
+    r = extract("Ref FT26236DZD1 and FT26236DZD16 seen", "cbe")
+    check("cbe: a five-char tail outranks a four", r["tokens"][0], "FT26236DZD16")
+
     # A QR payload arrives as its own line and needs no joining.
     r = extract("https://mbreciept.cbe.com.et/v2-hfHCxGxdqOQNRK57GBpT", "cbe")
     check("a QR link is taken whole",
