@@ -1,7 +1,7 @@
 # negarit-ocr
 
-Reads the text off a payment receipt screenshot so Negarit can find the
-transaction reference in it. Tesseract 5, CPU only.
+Reads the reference off a payment receipt screenshot. QR first, Tesseract
+after. CPU only, no SIMD required.
 
 Negarit calls this first and falls back to Odit when it comes back empty.
 
@@ -10,7 +10,15 @@ Negarit calls this first and falls back to Odit when it comes back empty.
 `POST /ocr` — the image as multipart `file`, the shared secret in the
 `x-ocr-secret` header. Answers:
 
-    { "text": "...", "lines": [{ "text": "...", "confidence": 0.98 }], "ms": 412 }
+    { "text": "...", "lines": [{ "text": "...", "confidence": 0.98 }],
+      "qr": ["https://mbreciept.cbe.com.et/v2-..."], "engine": "qr", "ms": 74 }
+
+`engine` says which read answered: `qr` when a barcode held a link, otherwise
+`tesseract`. Anything the QR carried is also the first line of `text`, so a
+caller that only reads `text` needs no change.
+
+A CBE app receipt answers from its QR in about 70ms. Everything else, telebirr
+SMS included, goes through OCR at about 800ms.
 
 `GET /health` — no auth, answers `{"ok": true}`.
 
@@ -26,6 +34,7 @@ set `OCR_SECRET` to something long and keep it out of git.
 | `OCR_PSM` | `6` | Tesseract page segmentation mode. See the warning below. |
 | `OCR_LANG` | `eng` | Tesseract language data. |
 | `OCR_TIMEOUT` | `30` | Seconds before a read is abandoned. |
+| `OCR_MAX_PIXELS` | `30000000` | Bigger images are refused with 413, read from the header so a decode bomb is never decoded. |
 | `OMP_THREAD_LIMIT` | `1` | Tesseract's own threads. Raising it slowed us down. |
 
 `OCR_PSM` is not a knob to leave alone. On our nine regression receipts, psm 6
@@ -55,6 +64,15 @@ certificate and should never be published on a port of its own.
 
 Point Negarit at the result with `OCR_URLS`. It is comma-separated and tried in
 order, so a second box is one env edit.
+
+## Why QR first
+
+CBE prints its live lookup token only inside the QR code. The visible FT number
+keys an endpoint the bank retired, so reading it perfectly still gets you
+nothing. The QR is checksummed rather than guessed, and it survived every abuse
+we threw at it: scaled to 15%, blurred 5px, saved at JPEG q30, and re-shared at
+40% scale and q40. It only fails once the code itself is cropped away or the
+JPEG drops below about q30.
 
 ## Why Tesseract
 
