@@ -1,46 +1,58 @@
 """
-Reads the text off a receipt screenshot. RapidOCR (PP-OCR models) on OpenVINO,
-falling back to ONNX Runtime. No GPU needed.
+Reads the text off a receipt screenshot so Negarit can find the transaction
+reference in it. Tesseract 5, CPU only.
+
+Tesseract is here because it needs no SIMD: it ships a plain C++ fallback, so
+it runs on old or masked CPUs where numpy, ONNX Runtime and OpenVINO all
+refuse to load. On our nine regression receipts it pulled exactly the same
+reference as the RapidOCR box it replaced, at about half the time.
 
 Start: uv run uvicorn server:app --port 8765
 """
-import io
 import os
+import subprocess
 import time
 
-import numpy as np
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile
-from PIL import Image, ImageOps
-from rapidocr import RapidOCR, EngineType
 
-MAX_SIDE = int(os.environ.get("OCR_MAX_SIDE", "1400"))  # screenshot text is large; 1400 keeps SMS fonts crisp
 SECRET = os.environ.get("OCR_SECRET")
+# psm 6 (one uniform block) or 11 (sparse) both read every sample; the default
+# psm 3 found the reference in only three of nine, so this is not a knob to
+# leave alone.
+PSM = os.environ.get("OCR_PSM", "6")
+LANG = os.environ.get("OCR_LANG", "eng")
+TIMEOUT_S = float(os.environ.get("OCR_TIMEOUT", "30"))
 
-# Threads: the box's cores split across the uvicorn workers, so workers do not
-# oversubscribe each other. Override either with OCR_THREADS / OCR_WORKERS.
-_workers = max(1, int(os.environ.get("OCR_WORKERS", "2")))
-_threads = int(os.environ.get("OCR_THREADS", str(max(1, (os.cpu_count() or 2) // _workers))))
-# OpenVINO beat onnxruntime on our Intel test box: detection 3.2x faster (1218ms ->
-# 375ms), same text on every sample. Set OCR_ENGINE=onnxruntime to fall back.
-_engine = EngineType.OPENVINO if os.environ.get("OCR_ENGINE", "openvino") == "openvino" else EngineType.ONNXRUNTIME
-ocr = RapidOCR(params={
-    "Global.log_level": "warning",
-    "Global.use_cls": False,  # screenshots are never upside down
-    "Det.engine_type": _engine,
-    "Rec.engine_type": _engine,
-    "Det.intra_op_num_threads": _threads,
-    "Rec.intra_op_num_threads": _threads,
-    "EngineConfig.openvino.inference_num_threads": _threads,
-})
 app = FastAPI()
 
 
-def to_array(data: bytes) -> np.ndarray:
-    img = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
-    scale = MAX_SIDE / max(img.size)
-    if scale < 1:
-        img = img.resize((round(img.width * scale), round(img.height * scale)), Image.LANCZOS)
-    return np.asarray(img)
+def read(data: bytes) -> list[dict]:
+    """Tesseract's TSV, folded back into one entry per line of text."""
+    done = subprocess.run(
+        ["tesseract", "stdin", "stdout", "--psm", PSM, "-l", LANG, "tsv"],
+        input=data, capture_output=True, timeout=TIMEOUT_S,
+    )
+    if done.returncode != 0:
+        raise HTTPException(500, done.stderr.decode("utf-8", "replace")[:300] or "tesseract failed")
+
+    rows = done.stdout.decode("utf-8", "replace").splitlines()
+    lines: dict[tuple, list[tuple[str, float]]] = {}
+    for row in rows[1:]:  # first row is the header
+        col = row.split("\t")
+        if len(col) < 12 or col[0] != "5":  # level 5 is a word; the rest are boxes around them
+            continue
+        word = col[11].strip()
+        if not word:
+            continue
+        lines.setdefault((col[2], col[3], col[4]), []).append((word, float(col[10])))
+
+    out = []
+    for words in lines.values():
+        # Tesseract scores 0-100 per word; the old box answered 0-1 per line,
+        # and callers still read it that way.
+        confidence = sum(score for _, score in words) / len(words) / 100
+        out.append({"text": " ".join(word for word, _ in words), "confidence": round(confidence, 3)})
+    return out
 
 
 @app.get("/health")
@@ -53,13 +65,15 @@ async def run(file: UploadFile = File(...), x_ocr_secret: str | None = Header(de
     if SECRET and x_ocr_secret != SECRET:
         raise HTTPException(401)
     started = time.perf_counter()
-    result = ocr(to_array(await file.read()))
-    lines = [
-        {"text": t, "confidence": round(float(s), 3)}
-        for t, s in zip(result.txts or [], result.scores or [])
-    ]
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "empty file")
+    try:
+        lines = read(data)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "tesseract timed out")
     return {
-        "text": "\n".join(l["text"] for l in lines),
+        "text": "\n".join(line["text"] for line in lines),
         "lines": lines,
         "ms": round((time.perf_counter() - started) * 1000),
     }

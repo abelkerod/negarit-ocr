@@ -1,15 +1,10 @@
 [project]
 name = "negarit-ocr"
-version = "0.0.1"
+version = "0.1.0"
 description = "Reads receipt screenshots for Negarit's payment verification. See README.md."
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12"
 dependencies = [
-  "rapidocr>=3.0",
-  "onnxruntime>=1.18",
-  "openvino>=2025.0",
   "fastapi>=0.115",
   "uvicorn>=0.30",
   "python-multipart>=0.0.9",
-  "pillow>=10",
-  "numpy",
 ]
