@@ -19,6 +19,7 @@ import random
 import string
 import subprocess
 import sys
+import datetime
 from datetime import datetime, timedelta
 
 import qrcode
@@ -49,7 +50,14 @@ def name():   return f"{random.choice(FIRST)} {random.choice(LAST)}"
 def amount(): return f"{random.choice([10,25,50,100,150,200,350,500,800,1250,2000,5000,12500]) + random.choice([0,.5,.25,.75]):,.2f}"
 def acct():   return f"1{'*' * random.choice([5, 8])}{random.randint(1000, 9999)}"
 def phone():  return f"2519{random.randint(10000000, 99999999)}"
-def cbe_token():  return "FT" + "".join(random.choices(string.digits, k=5)) + "".join(random.choices(ALNUM, k=random.choice([4, 5, 6])))
+def cbe_token(on: datetime.date) -> str:
+    """FT + two-digit year + day of year + a five-character tail.
+
+    The digits are the receipt's own date, because that is what CBE puts
+    there. A corpus of random digits would be rejected as impossible dates by
+    the very check it is meant to exercise.
+    """
+    return f"FT{on.year % 100:02d}{on.timetuple().tm_yday:03d}" + "".join(random.choices(ALNUM, k=5))
 
 
 def tb_token():
@@ -61,7 +69,7 @@ def tb_token():
 
 def when():
     d = datetime(2026, 9, 5) - timedelta(days=random.randint(0, 120), minutes=random.randint(0, 1440))
-    return d.strftime("%d/%m/%Y"), d.strftime("%H:%M"), d.strftime("%H:%M:%S")
+    return d.strftime("%d/%m/%Y"), d.strftime("%H:%M"), d.strftime("%H:%M:%S"), d.date()
 
 
 def wrap(draw, text, font, width):
@@ -94,9 +102,9 @@ def wrap(draw, text, font, width):
 
 def body_for(kind):
     """The text, plus the reference the box is expected to answer with."""
-    date, hm, hms = when()
+    date, hm, hms, on = when()
     if kind.startswith("cbe"):
-        tok = cbe_token()
+        tok = cbe_token(on)
         # Half carry the link CBE still resolves, half the retired apps host.
         # A retired link is never the reference, and neither is a bare FT
         # number, so those images expect nothing back.

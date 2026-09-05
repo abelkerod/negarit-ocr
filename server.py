@@ -96,8 +96,8 @@ def read_text(data: bytes) -> list[dict]:
     done = subprocess.run(
         # The whitelist prunes the beam of characters a reference can never
         # contain: lowercase l, o, the pipe, the full stop. Measured +5 points
-        # on 80 telebirr screenshots. It cannot decide O against 0, since both
-        # are legal; that is what the day-of-year check in extract.py is for.
+        # on 80 telebirr screenshots. It cannot choose between O and 0, since
+        # both are legal; the day-of-year check in extract.py does that.
         ["tesseract", "stdin", "stdout", "--psm", PSM, "-l", LANG,
          "-c", "tessedit_char_whitelist=" + WHITELIST, "tsv"],
         input=data, capture_output=True, timeout=TIMEOUT_S,
