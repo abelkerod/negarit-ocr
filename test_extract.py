@@ -94,8 +94,13 @@ def main():
           r["reference"], "https://transactioninfo.ethiotelecom.et/receipt/DHT09Z7NCY")
     r = extract("transaction number is DHT09Z7NCY.", "telebirr")
     check("telebirr: a correct token is left alone", r["reference"], "DHT09Z7NCY")
-    r = extract("transaction number is XHT09Z7NCY.", "telebirr")
-    check("telebirr: first character is only ever C or D", r["reference"], None)
+    # A telebirr token opens with its own date: year, month, day.
+    r = extract("transaction number is DBV12BCDFG.", "telebirr")
+    check("telebirr: February has no 31st", r["reference"], None)
+    r = extract("transaction number is DMA12BCDFG.", "telebirr")
+    check("telebirr: there is no thirteenth month", r["reference"], None)
+    r = extract("transaction number is DHT09Z7NCY.", "telebirr")
+    check("telebirr: a real August token is fine", r["reference"], "DHT09Z7NCY")
 
     # A QR payload arrives as its own line and needs no joining.
     r = extract("https://mbreciept.cbe.com.et/v2-hfHCxGxdqOQNRK57GBpT", "cbe")

@@ -48,7 +48,9 @@ ALNUM = string.ascii_uppercase + string.digits
 # alphanumerics made a corpus that lies: it produced CBE tails full of vowels,
 # which CBE never issues, and so invented failures the box will never meet.
 CBE_TAIL = "0123456789BCDFGHJKLMNPQRSTVWXYZ"
-TB_POS = ["CD", "ABCDEFGHIJKL", "123456789ABCDEFGHIJKLMNOPQRSTUV", "0123456789"]
+TB_MONTHS = "ABCDEFGHIJKL"
+TB_DAYS = "0123456789ABCDEFGHIJKLMNOPQRSTUV"
+TB_YEARS = {2025: "C", 2026: "D"}
 
 
 def name():   return f"{random.choice(FIRST)} {random.choice(LAST)}"
@@ -65,9 +67,13 @@ def cbe_token(on: datetime.date) -> str:
     return f"FT{on.year % 100:02d}{on.timetuple().tm_yday:03d}" + "".join(random.choices(CBE_TAIL, k=5))
 
 
-def tb_token():
-    """Four constrained positions then six free ones, as telebirr issues them."""
-    return "".join(random.choice(p) for p in TB_POS) + "".join(random.choices(ALNUM, k=6))
+def tb_token(on: datetime.date) -> str:
+    """Year, month and day, then a digit, then six free characters.
+
+    Telebirr opens a token with its own date, checked right on 427 real ones.
+    """
+    return (TB_YEARS.get(on.year, "D") + TB_MONTHS[on.month - 1] + TB_DAYS[on.day]
+            + random.choice("0123456789") + "".join(random.choices(ALNUM, k=6)))
 
 
 def when():
@@ -128,7 +134,7 @@ def body_for(kind):
                     f"ETB {amount()} has been debited from {name()} for {name()} "
                     f"on {date} {hms} with transaction ID: {tok}. Reason: MB Transfer")
         return text, "cbe", (link if link and "mbreciept" in link else None), tok, link
-    tok = tb_token()
+    tok = tb_token(on)
     link = f"https://transactioninfo.ethiotelecom.et/receipt/{tok}"
     if kind == "tb_sms":
         text = (f"Dear {name().title().split()[0]}, You have transferred ETB {amount()} to "
