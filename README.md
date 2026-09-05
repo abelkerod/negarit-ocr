@@ -49,6 +49,8 @@ set `OCR_SECRET` to something long and keep it out of git.
 | `OCR_LANG` | `eng` | Tesseract language data. |
 | `OCR_TIMEOUT` | `30` | Seconds before a read is abandoned. |
 | `OCR_MAX_PIXELS` | `30000000` | Bigger images are refused with 413, read from the header so a decode bomb is never decoded. |
+| `OCR_ARCHIVE_DIR` | unset | Where to keep every request and the image it carried. Unset writes nothing. |
+| `OCR_ARCHIVE_MAX_MB` | `2048` | Ceiling on the images directory. Oldest go first; the request log is never pruned. |
 | `OMP_THREAD_LIMIT` | `1` | Tesseract's own threads. Raising it slowed us down. |
 
 `OCR_PSM` is not a knob to leave alone. On our nine regression receipts, psm 6
@@ -86,6 +88,23 @@ certificate and should never be published on a port of its own.
 
 Point Negarit at the result with `OCR_URLS`. It is comma-separated and tried in
 order, so a second box is one env edit.
+
+## Keeping what came in
+
+Set `OCR_ARCHIVE_DIR` and every request is appended to `requests.jsonl` there,
+with the image beside it under `images/`:
+
+    {"at":"2026-09-05T19:22:11+00:00","provider":"telebirr","engine":"tesseract",
+     "ms":1710,"bytes":348843,"px":[1080,2316],"reference":"DHO742I76F",
+     "tokens":["DHO742I76F"],"lines":18,"file":"9c1f2a77b3e40d51.jpg"}
+
+Images are named by their own hash, so a buyer retrying the same screenshot
+costs one file and two log lines. Archiving never fails a read: a directory it
+cannot write to is logged and ignored.
+
+These are real receipts, carrying names, part of an account number and a
+balance. Point `OCR_ARCHIVE_DIR` at a volume you are willing to hold that on,
+and leave it unset anywhere you are not.
 
 ## Why QR first
 

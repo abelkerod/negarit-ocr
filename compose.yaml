@@ -7,8 +7,14 @@ services:
     environment:
       OCR_SECRET: ${OCR_SECRET:?set OCR_SECRET}
       OCR_WORKERS: ${OCR_WORKERS:-2}
+      OCR_ARCHIVE_DIR: ${OCR_ARCHIVE_DIR:-}
+      OCR_ARCHIVE_MAX_MB: ${OCR_ARCHIVE_MAX_MB:-2048}
     ports: ["127.0.0.1:8765:8765"]
+    volumes:
+      - archive:/data
     deploy:
       resources:
         limits:
           memory: 512m
+volumes:
+  archive:

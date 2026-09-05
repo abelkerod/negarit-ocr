@@ -18,10 +18,13 @@ OpenVINO all refuse to load.
 
 Start: uv run uvicorn server:app --port 8765
 """
+import hashlib
+import json
 import os
 import struct
 import subprocess
 import time
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 
@@ -43,6 +46,15 @@ WHITELIST = os.environ.get(
 # held. 30MP is far above any phone screenshot and far below anything that
 # would tie this box up.
 MAX_PIXELS = int(os.environ.get("OCR_MAX_PIXELS", str(30_000_000)))
+# Where every request and every image it carried is kept. Unset means nothing
+# is written, which is how the image ships: an archive of receipts is a thing
+# you opt into on purpose, not something a default turns on.
+ARCHIVE_DIR = os.environ.get("OCR_ARCHIVE_DIR", "")
+# A full disk stops the box reading anything at all, so the archive has a
+# ceiling. Oldest images go first; the request log is never pruned.
+ARCHIVE_MAX_MB = int(os.environ.get("OCR_ARCHIVE_MAX_MB", "2048"))
+
+SUFFIXES = ((b"\x89PNG\r\n\x1a\n", ".png"), (b"\xff\xd8", ".jpg"), (b"RIFF", ".webp"))
 
 app = FastAPI()
 
@@ -132,6 +144,62 @@ def read_text(data: bytes) -> list[dict]:
     return out
 
 
+def suffix_for(data: bytes) -> str:
+    for magic, suffix in SUFFIXES:
+        if data.startswith(magic):
+            return suffix
+    return ".bin"
+
+
+def prune(images: str) -> None:
+    """Drop the oldest images once the archive passes its ceiling."""
+    entries = []
+    total = 0
+    for name in os.listdir(images):
+        path = os.path.join(images, name)
+        try:
+            stat = os.stat(path)
+        except FileNotFoundError:
+            continue
+        entries.append((stat.st_mtime, stat.st_size, path))
+        total += stat.st_size
+    ceiling = ARCHIVE_MAX_MB * 1024 * 1024
+    for _, size, path in sorted(entries):
+        if total <= ceiling:
+            break
+        try:
+            os.remove(path)
+            total -= size
+        except OSError:
+            pass
+
+
+def archive(data: bytes, entry: dict) -> None:
+    """Keep the request and the image it carried.
+
+    Content-addressed, so a buyer's retry of the same screenshot costs one
+    file and two log lines rather than two files. Never raises: an archive
+    that cannot be written is not a reason to fail a read the buyer is
+    waiting on.
+    """
+    if not ARCHIVE_DIR:
+        return
+    try:
+        images = os.path.join(ARCHIVE_DIR, "images")
+        os.makedirs(images, exist_ok=True)
+        name = hashlib.sha256(data).hexdigest()[:16] + suffix_for(data)
+        path = os.path.join(images, name)
+        if not os.path.exists(path):
+            with open(path, "wb") as fh:
+                fh.write(data)
+            prune(images)
+        entry["file"] = name
+        with open(os.path.join(ARCHIVE_DIR, "requests.jsonl"), "a") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except Exception as error:  # noqa: BLE001 - archiving must never fail a read
+        print(f"[ocr] archive failed: {type(error).__name__}: {error}", flush=True)
+
+
 @app.get("/health")
 def health():
     return {"ok": True}
@@ -172,6 +240,18 @@ async def run(
 
     text = "\n".join(line["text"] for line in lines)
     found = extract(text, provider) if provider else {"links": [], "tokens": [], "legacy": [], "reference": None}
+    elapsed = round((time.perf_counter() - started) * 1000)
+    archive(data, {
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "provider": provider,
+        "engine": engine,
+        "ms": elapsed,
+        "bytes": len(data),
+        "px": list(size) if size else None,
+        "reference": found["reference"],
+        "tokens": found["tokens"],
+        "lines": len(lines),
+    })
     return {
         "text": text,
         "lines": lines,
@@ -182,5 +262,5 @@ async def run(
         "links": found["links"],
         "tokens": found["tokens"],
         "legacy": found["legacy"],
-        "ms": round((time.perf_counter() - started) * 1000),
+        "ms": elapsed,
     }
