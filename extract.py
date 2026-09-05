@@ -63,17 +63,26 @@ def repair_telebirr(token: str) -> str:
     return "".join(out)
 
 
-TB_RECEIPT = re.compile(r"(ethiotelecom\.et/receipt/)([A-Za-z0-9]+)", re.I)
+TB_RECEIPT = re.compile(r"ethiotelecom\.et/\S*?/?([A-Za-z0-9]{8,12})/?$", re.I)
+TB_CANONICAL = "https://transactioninfo.ethiotelecom.et/receipt/"
 
 
 def repair_telebirr_link(url: str) -> str:
-    """The receipt link ends in the same token, and carries the same misread.
+    """Rebuild the link around its token, keeping nothing OCR read of the rest.
+
+    Everything before the token is the same on every telebirr receipt, so
+    reading it is a chance to be wrong for no gain: one real screenshot came
+    back saying "recelpt". Only the last path segment carries information, and
+    it carries the same misread as the loose token, so it is repaired too.
 
     Repairing only the loose token would leave the link wrong and still
     preferred, which is the worst outcome: a confident answer that fails at
     the bank.
     """
-    return TB_RECEIPT.sub(lambda m: m.group(1) + repair_telebirr(m.group(2).upper()), url)
+    m = TB_RECEIPT.search(url.rstrip("."))
+    if not m:
+        return url
+    return TB_CANONICAL + repair_telebirr(m.group(1).upper())
 
 
 def plausible_telebirr(token: str) -> bool:

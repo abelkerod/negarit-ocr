@@ -92,6 +92,11 @@ def main():
     r = extract("https://transactioninfo.ethiotelecom.et/receipt/DHTO9Z7NCY", "telebirr")
     check("telebirr: and the link is repaired with it",
           r["reference"], "https://transactioninfo.ethiotelecom.et/receipt/DHT09Z7NCY")
+    # Everything before the token is the same on every receipt, so reading it
+    # is only a chance to be wrong. One real screenshot came back "recelpt".
+    r = extract("https://transactioninfo.ethiotelecom.et/recelpt/DHT09Z7NCY", "telebirr")
+    check("telebirr: a misread path is rebuilt, not trusted",
+          r["reference"], "https://transactioninfo.ethiotelecom.et/receipt/DHT09Z7NCY")
     r = extract("transaction number is DHT09Z7NCY.", "telebirr")
     check("telebirr: a correct token is left alone", r["reference"], "DHT09Z7NCY")
     # A telebirr token opens with its own date: year, month, day.
