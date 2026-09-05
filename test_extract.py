@@ -107,6 +107,18 @@ def main():
     r = extract("transaction number is DHT09Z7NCY.", "telebirr")
     check("telebirr: a real August token is fine", r["reference"], "DHT09Z7NCY")
 
+    # The fourth character is the base-36 value of the last six, modulo ten, so
+    # a single O/0 or I/1 flip anywhere in the tail always shows up. These two
+    # are real reads off real screenshots, and both repair to the real token.
+    r = extract("transaction number is DHO742176F.", "telebirr")
+    check("telebirr: a misread I is restored by the check digit",
+          r["reference"], "DHO742I76F")
+    r = extract("https://transactioninfo.ethiotelecom.et/receipt/DH90N1PFVO", "telebirr")
+    check("telebirr: and inside the link too",
+          r["reference"], "https://transactioninfo.ethiotelecom.et/receipt/DH90N1PFV0")
+    r = extract("transaction number is DHO742176X.", "telebirr")
+    check("telebirr: a token no flip can restore is not offered", r["reference"], None)
+
     # A QR payload arrives as its own line and needs no joining.
     r = extract("https://mbreciept.cbe.com.et/v2-hfHCxGxdqOQNRK57GBpT", "cbe")
     check("a QR link is taken whole",

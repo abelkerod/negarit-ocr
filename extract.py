@@ -15,6 +15,7 @@ implementations of one grammar and will drift if only one is changed; the
 fixtures in test_extract.py are the cheapest place to notice.
 """
 import datetime
+import itertools
 import re
 
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
@@ -51,6 +52,56 @@ def repair_cbe(token: str) -> str:
     return token[:2] + "".join(HOMOGLYPH_TO_DIGIT.get(c, c) for c in token[2:])
 
 
+# OCR reads the letter for the digit about twice as often as the reverse, so
+# when two candidates both pass the check, the digit reading goes first.
+CONFUSABLE = {"O": "0", "0": "O", "I": "1", "1": "I", "S": "5", "5": "S"}
+PREFERRED = "015"
+
+
+def telebirr_checksum_ok(token: str) -> bool:
+    """The fourth character is the last decimal digit of the six that follow it.
+
+    Positions 4 to 9 are one base-36 counter and position 3 is that number mod
+    10. True on 492 of 492 real tokens, against a one-in-ten chance. Found by
+    Fable 5.1; per-character schemes all sat at chance because the check is
+    over the value, not over the digits.
+    """
+    if len(token) != 10 or not token[3].isdigit():
+        return False
+    try:
+        return int(token[4:], 36) % 10 == int(token[3])
+    except ValueError:
+        return False
+
+
+def repair_telebirr_checksum(token: str) -> list[str]:
+    """Tokens worth submitting, best first. Empty means a misread we cannot fix.
+
+    A single O/0, I/1 or S/5 flip anywhere in the free positions always moves
+    the check digit, so a wrong token is caught before it is submitted rather
+    than after the bank refuses it. Most of the time exactly one flip restores
+    it, and that is the answer with no lookup at all.
+    """
+    if len(token) != 10:
+        return [token]
+    if telebirr_checksum_ok(token):
+        return [token]
+    slots = [i for i in range(4, 10) if token[i] in CONFUSABLE]
+    for count in range(1, len(slots) + 1):      # fewest flips first
+        found = []
+        for chosen in itertools.combinations(slots, count):
+            candidate = list(token)
+            for i in chosen:
+                candidate[i] = CONFUSABLE[candidate[i]]
+            candidate = "".join(candidate)
+            if telebirr_checksum_ok(candidate):
+                found.append(candidate)
+        if found:
+            found.sort(key=lambda c: -sum(1 for i in slots if c[i] in PREFERRED))
+            return found
+    return []
+
+
 def repair_telebirr(token: str) -> str:
     """Fix only the positions whose alphabet decides the answer."""
     out = list(token)
@@ -82,7 +133,9 @@ def repair_telebirr_link(url: str) -> str:
     m = TB_RECEIPT.search(url.rstrip("."))
     if not m:
         return url
-    return TB_CANONICAL + repair_telebirr(m.group(1).upper())
+    fixed = repair_telebirr(m.group(1).upper())
+    best = repair_telebirr_checksum(fixed)
+    return TB_CANONICAL + (best[0] if best else fixed)
 
 
 def plausible_telebirr(token: str) -> bool:
@@ -123,6 +176,7 @@ PROVIDERS = {
         "token": re.compile(r"\bFT\d{5}[A-Z0-9]{4,6}\b"),
         "valid": plausible_cbe,
         "repair": repair_cbe,
+        "checksum": None,
         "repair_link": None,
         "prefer": lambda t: len(t) == 12,
         "link": lambda host: host == "mbreciept.cbe.com.et",
@@ -137,6 +191,7 @@ PROVIDERS = {
         "legacy": None,
         "valid": plausible_telebirr,
         "repair": repair_telebirr,
+        "checksum": repair_telebirr_checksum,
         "repair_link": repair_telebirr_link,
         "prefer": None,
         "token_is_evidence": True,
@@ -195,6 +250,11 @@ def extract(text: str, provider: str) -> dict:
         # so a reference is only impossible once that has been applied.
         if spec.get("repair"):
             tok = spec["repair"](tok)
+        if spec.get("checksum"):
+            fixed = spec["checksum"](tok)
+            if not fixed:
+                continue  # the check says this was misread and no flip restores it
+            tok = fixed[0]
         if tok in tokens:
             continue
         if spec.get("valid") and not spec["valid"](tok):

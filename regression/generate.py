@@ -68,12 +68,16 @@ def cbe_token(on: datetime.date) -> str:
 
 
 def tb_token(on: datetime.date) -> str:
-    """Year, month and day, then a digit, then six free characters.
+    """Year, month, day, a check digit, then six characters of counter.
 
-    Telebirr opens a token with its own date, checked right on 427 real ones.
+    Telebirr opens a token with its own date, and its fourth character is the
+    base-36 value of the last six modulo ten. Both hold on every real token we
+    have, so a corpus that ignored them would score a box that refuses its own
+    reference.
     """
+    tail = "".join(random.choices(ALNUM, k=6))
     return (TB_YEARS.get(on.year, "D") + TB_MONTHS[on.month - 1] + TB_DAYS[on.day]
-            + random.choice("0123456789") + "".join(random.choices(ALNUM, k=6)))
+            + str(int(tail, 36) % 10) + tail)
 
 
 def when():
