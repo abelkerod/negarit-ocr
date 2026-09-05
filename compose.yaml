@@ -1,0 +1,14 @@
+# Local / plain-Docker run. Coolify does not use this file: it builds the
+# Dockerfile directly and terminates TLS at its own proxy.
+services:
+  ocr:
+    build: .
+    restart: unless-stopped
+    environment:
+      OCR_SECRET: ${OCR_SECRET:?set OCR_SECRET}
+      OCR_WORKERS: ${OCR_WORKERS:-2}
+    ports: ["127.0.0.1:8765:8765"]
+    deploy:
+      resources:
+        limits:
+          memory: 3000m
