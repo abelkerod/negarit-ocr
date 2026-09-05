@@ -8,10 +8,24 @@ Negarit calls this first and falls back to Odit when it comes back empty.
 ## API
 
 `POST /ocr` — the image as multipart `file`, the shared secret in the
-`x-ocr-secret` header. Answers:
+`x-ocr-secret` header, and optionally `provider` (`cbe` or `telebirr`).
+
+The provider is a parameter, never a guess. Working out which bank a
+screenshot belongs to is a harder problem than reading it, and the caller
+already knows which one the buyer picked. Without it the box still answers
+text and barcodes, just no reference. An unknown provider is a 400.
+
+Answers:
 
     { "text": "...", "lines": [{ "text": "...", "confidence": 0.98 }],
-      "qr": ["https://mbreciept.cbe.com.et/v2-..."], "engine": "qr", "ms": 74 }
+      "qr": ["https://mbreciept.cbe.com.et/v2-..."], "engine": "qr",
+      "provider": "cbe", "reference": "https://mbreciept.cbe.com.et/v2-...",
+      "links": [...], "tokens": ["FT26241X7KQ3"], "legacy": [], "ms": 74 }
+
+`reference` is the one worth submitting: the receipt link when there is one,
+otherwise the bare token for providers that accept it. CBE does not — its FT
+number keys a retired endpoint — so a CBE receipt with no readable link
+answers `reference: null` and names the token in `tokens` anyway.
 
 `engine` says which read answered: `qr` when a barcode held a link, otherwise
 `tesseract`. Anything the QR carried is also the first line of `text`, so a
@@ -40,6 +54,14 @@ set `OCR_SECRET` to something long and keep it out of git.
 `OCR_PSM` is not a knob to leave alone. On our nine regression receipts, psm 6
 and psm 11 both found every reference; the Tesseract default of psm 3 found
 three of nine.
+
+## Tests
+
+    python3 test_extract.py
+
+The grammar here mirrors Negarit's `shared/extract-reference.ts`. They are two
+implementations of one thing and will drift if only one is changed; those
+fixtures are the cheapest place to notice.
 
 ## Run locally
 

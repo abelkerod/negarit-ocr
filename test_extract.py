@@ -1,0 +1,70 @@
+"""
+Fixtures are shaped like real receipts but carry no real account or name.
+
+The wrapped-link cases are the ones that matter: CBE breaks its receipt link
+mid-token across two lines, and OCR reads it back that way.
+
+    python3 test_extract.py
+"""
+from extract import extract, join_wrapped_urls
+
+# How OCR actually reads a CBE SMS screenshot: the link splits after "/v2".
+CBE_SMS = """Dear TEST NAME your Account 1*****0000 has been debited with ETB
+250.00 Service Charge ETB 2.00 VAT ETB 0.30 on 05/09/2026 at 10:12 with Ref
+FT26241X7KQ3 transferred to OTHER NAME. Your current balance is ETB 100.00.
+Thanks for Banking with CBE.
+https://mbreciept.cbe.com.et/v2
+-hfHCxGxayyn332GrsZRI for
+feedback:
+https://forms.gle/kGNGQpG3mQCCk"""
+
+CBE_SMS_LEGACY_ONLY = """Ref FT26241X7KQ3 transferred to OTHER NAME.
+https://apps.cbe.com.et:100/?id=FT26241X7KQ322967116"""
+
+TELEBIRR_SMS = """Dear Test, You have transferred ETB 800.00 to Other Name
+(251900000000) on 05/09/2026 10:12:00. Your transaction number is DGS2BT1W54.
+Your current balance is ETB 1,240.55. Thank you for using telebirr."""
+
+
+def check(label, got, want):
+    assert got == want, f"{label}\n  got:  {got!r}\n  want: {want!r}"
+    print(f"  ok  {label}")
+
+
+def main():
+    r = extract(CBE_SMS, "cbe")
+    check("cbe: wrapped link is rejoined",
+          r["reference"], "https://mbreciept.cbe.com.et/v2-hfHCxGxayyn332GrsZRI")
+    check("cbe: the FT token is still reported", r["tokens"], ["FT26241X7KQ3"])
+
+    r = extract(CBE_SMS_LEGACY_ONLY, "cbe")
+    check("cbe: a retired link is never the reference", r["reference"], None)
+    check("cbe: but it is named as legacy",
+          r["legacy"], ["https://apps.cbe.com.et:100/?id=FT26241X7KQ322967116"])
+    check("cbe: a bare FT number is not evidence", r["reference"], None)
+
+    r = extract(TELEBIRR_SMS, "telebirr")
+    check("telebirr: the token is the reference", r["reference"], "DGS2BT1W54")
+
+    r = extract("Ref FT 26241X7KQ3 transferred", "cbe")
+    check("cbe: OCR's space after FT is closed up", r["tokens"], ["FT26241X7KQ3"])
+
+    r = extract(TELEBIRR_SMS, "cbe")
+    check("a telebirr receipt read as cbe finds nothing", r["reference"], None)
+
+    r = extract(CBE_SMS, "unknown")
+    check("an unknown provider finds nothing", r["reference"], None)
+
+    check("an unwrapped link is left alone",
+          join_wrapped_urls("see https://example.com/a and stop"),
+          "see https://example.com/a and stop")
+
+    # A QR payload arrives as its own line and needs no joining.
+    r = extract("https://mbreciept.cbe.com.et/v2-hfHCxGxdqOQNRK57GBpT", "cbe")
+    check("a QR link is taken whole",
+          r["reference"], "https://mbreciept.cbe.com.et/v2-hfHCxGxdqOQNRK57GBpT")
+    print("all passed")
+
+
+if __name__ == "__main__":
+    main()

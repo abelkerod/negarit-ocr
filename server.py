@@ -1,6 +1,11 @@
 """
 Reads the reference off a receipt screenshot. QR first, Tesseract after.
 
+The provider is a parameter, never a guess. Working out which bank a
+screenshot belongs to is a harder problem than reading it, and the caller
+already knows which one the buyer picked. Without it the box still answers
+text and barcodes, just no reference.
+
 QR before OCR because CBE prints its live lookup token only in the QR: the
 visible FT number keys an endpoint the bank retired, so reading it perfectly
 still gets you nothing. The QR is checksummed, survives being scaled to 15%,
@@ -18,7 +23,9 @@ import struct
 import subprocess
 import time
 
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+
+from extract import PROVIDERS, extract
 
 SECRET = os.environ.get("OCR_SECRET")
 # psm 6 (one uniform block) or 11 (sparse) both read every sample; the default
@@ -121,7 +128,11 @@ def health():
 
 
 @app.post("/ocr")
-async def run(file: UploadFile = File(...), x_ocr_secret: str | None = Header(default=None)):
+async def run(
+    file: UploadFile = File(...),
+    provider: str | None = Form(default=None),
+    x_ocr_secret: str | None = Header(default=None),
+):
     if SECRET and x_ocr_secret != SECRET:
         raise HTTPException(401)
     started = time.perf_counter()
@@ -132,22 +143,34 @@ async def run(file: UploadFile = File(...), x_ocr_secret: str | None = Header(de
     if size and size[0] * size[1] > MAX_PIXELS:
         raise HTTPException(413, f"image is {size[0]}x{size[1]}, over the {MAX_PIXELS} pixel limit")
 
-    qr = read_qr(data)
-    # A QR that carries a link is the answer; reading the picture as well only
-    # spends a second to agree with it.
-    if any(q.startswith(("http://", "https://")) for q in qr):
-        lines = [{"text": q, "confidence": 1.0} for q in qr]
-        engine = "qr"
-    else:
-        lines = read_text(data)
-        engine = "tesseract"
-        # Still hand back anything non-link the barcode held; it costs nothing.
-        lines = [{"text": q, "confidence": 1.0} for q in qr] + lines
+    provider = (provider or "").strip().lower() or None
+    if provider and provider not in PROVIDERS:
+        raise HTTPException(400, f"unknown provider {provider!r}, expected one of {sorted(PROVIDERS)}")
 
+    qr = read_qr(data)
+    lines = [{"text": q, "confidence": 1.0} for q in qr]
+    # A QR that already answers the question makes OCR a second spent agreeing.
+    # A QR that does not — an advert, a feedback form — must not silence it.
+    if provider:
+        answered = bool(extract("\n".join(qr), provider)["reference"])
+    else:
+        answered = any(q.startswith(("http://", "https://")) for q in qr)
+    engine = "qr"
+    if not answered:
+        lines = lines + read_text(data)
+        engine = "tesseract"
+
+    text = "\n".join(line["text"] for line in lines)
+    found = extract(text, provider) if provider else {"links": [], "tokens": [], "legacy": [], "reference": None}
     return {
-        "text": "\n".join(line["text"] for line in lines),
+        "text": text,
         "lines": lines,
         "qr": qr,
         "engine": engine,
+        "provider": provider,
+        "reference": found["reference"],
+        "links": found["links"],
+        "tokens": found["tokens"],
+        "legacy": found["legacy"],
         "ms": round((time.perf_counter() - started) * 1000),
     }

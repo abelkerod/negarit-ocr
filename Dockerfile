@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN pip install --no-cache-dir uv && uv sync --frozen --no-dev --no-install-project
-COPY server.py .
+COPY server.py extract.py ./
 EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8765/health')"
 # Shell form so OCR_WORKERS expands; exec keeps uvicorn as PID 1 for signals.
