@@ -33,7 +33,14 @@ def read(data: bytes) -> list[dict]:
         input=data, capture_output=True, timeout=TIMEOUT_S,
     )
     if done.returncode != 0:
-        raise HTTPException(500, done.stderr.decode("utf-8", "replace")[:300] or "tesseract failed")
+        # Tesseract only exits non-zero when it cannot read what it was given,
+        # so this is the caller's problem, not an outage. It matters which:
+        # Negarit retries 5xx as a transient failure, and would burn a buyer's
+        # whole retry ladder on an image that can never be read. The stderr is
+        # logged rather than returned because leptonica echoes the bytes it
+        # choked on straight back into the message.
+        print(f"[ocr] unreadable input: {done.stderr.decode('utf-8', 'replace')[:300]}", flush=True)
+        raise HTTPException(400, "could not read that image")
 
     rows = done.stdout.decode("utf-8", "replace").splitlines()
     lines: dict[tuple, list[tuple[str, float]]] = {}
