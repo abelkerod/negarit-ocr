@@ -61,18 +61,41 @@ def main():
 
     # The five digits after FT are a day of year, so a misread that puts a
     # letter or an impossible day there is structurally not a reference.
-    r = extract("Ref FT26999ABCDE transferred", "cbe")
+    r = extract("Ref FT26999BCDFG transferred", "cbe")
     check("cbe: day 999 is a misread, not a reference", r["tokens"], [])
-    r = extract("Ref FT26000ABCDE transferred", "cbe")
+    r = extract("Ref FT26000BCDFG transferred", "cbe")
     check("cbe: day 000 is a misread too", r["tokens"], [])
     r = extract("Ref FT26236DZD16 transferred", "cbe")
     check("cbe: a real day of year survives", r["tokens"], ["FT26236DZD16"])
-    r = extract("Ref FT27366ABCDE transferred", "cbe")
+    r = extract("Ref FT27366BCDFG transferred", "cbe")
     check("cbe: day 366 needs a leap year", r["tokens"], [])
-    r = extract("Ref FT28366ABCDE transferred", "cbe")
-    check("cbe: 2028 has one", r["tokens"], ["FT28366ABCDE"])
+    r = extract("Ref FT28366BCDFG transferred", "cbe")
+    check("cbe: 2028 has one", r["tokens"], ["FT28366BCDFG"])
     r = extract("Ref FT26236DZD1 and FT26236DZD16 seen", "cbe")
-    check("cbe: a five-char tail outranks a four", r["tokens"][0], "FT26236DZD16")
+    check("cbe: the four-character read is discarded", r["tokens"], ["FT26236DZD16"])
+
+    # Measured over 494 CBE and 524 telebirr messages off a real handset.
+    # CBE puts no vowel in a tail, so an O or an I there was never in the image.
+    r = extract("Ref FT26236DZDI6 transferred", "cbe")
+    check("cbe: I in a tail is a one", r["tokens"], ["FT26236DZD16"])
+    r = extract("Ref FT26236DZDO6 transferred", "cbe")
+    check("cbe: O in a tail is a zero", r["tokens"], ["FT26236DZD06"])
+    r = extract("Ref FT26236DZDA6 transferred", "cbe")
+    check("cbe: a vowel that is not a homoglyph is dropped", r["tokens"], [])
+    r = extract("Ref FT26236DZD1 transferred", "cbe")
+    check("cbe: a four-character tail is not a reference", r["tokens"], [])
+
+    # Telebirr does use both O and 0, but not in the same place: its fourth
+    # character is always a digit and its third is never a zero.
+    r = extract("transaction number is DHTO9Z7NCY.", "telebirr")
+    check("telebirr: O in the digit slot is a zero", r["reference"], "DHT09Z7NCY")
+    r = extract("https://transactioninfo.ethiotelecom.et/receipt/DHTO9Z7NCY", "telebirr")
+    check("telebirr: and the link is repaired with it",
+          r["reference"], "https://transactioninfo.ethiotelecom.et/receipt/DHT09Z7NCY")
+    r = extract("transaction number is DHT09Z7NCY.", "telebirr")
+    check("telebirr: a correct token is left alone", r["reference"], "DHT09Z7NCY")
+    r = extract("transaction number is XHT09Z7NCY.", "telebirr")
+    check("telebirr: first character is only ever C or D", r["reference"], None)
 
     # A QR payload arrives as its own line and needs no joining.
     r = extract("https://mbreciept.cbe.com.et/v2-hfHCxGxdqOQNRK57GBpT", "cbe")

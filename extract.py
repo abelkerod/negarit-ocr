@@ -22,6 +22,59 @@ URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 # one no sentence starts with. Real CBE receipts wrap mid-token exactly here.
 CONTINUATION = re.compile(r"\n(?:([\w\-.~%/?=&#:]+)(?=\n|$)|([\-._/?=&%~][\w\-.~%/?=&#:]*))")
 
+# Measured over 494 CBE and 524 telebirr messages from a real handset.
+#
+# CBE never puts a vowel in the tail, so an O or an I in a reference is not a
+# reference that will fail to verify, it is a misread we can correct. Telebirr
+# does use both O and 0, but not everywhere: its fourth character is always a
+# digit and its third is never a zero, which is enough to fix the confusion
+# exactly where it happens.
+CBE_TAIL_ALPHABET = set("0123456789BCDFGHJKLMNPQRSTVWXYZ")
+HOMOGLYPH_TO_DIGIT = {"O": "0", "I": "1"}
+TELEBIRR_POSITIONS = [
+    set("CD"),                                  # 0
+    set("ABCDEFGHIJKL"),                        # 1
+    set("123456789ABCDEFGHIJKLMNOPQRSTUV"),     # 2, never a zero
+    set("0123456789"),                          # 3, always a digit
+]
+
+
+def repair_cbe(token: str) -> str:
+    """O is a zero and I is a one, because CBE's alphabet holds neither."""
+    return token[:2] + "".join(HOMOGLYPH_TO_DIGIT.get(c, c) for c in token[2:])
+
+
+def repair_telebirr(token: str) -> str:
+    """Fix only the positions whose alphabet decides the answer."""
+    out = list(token)
+    for i, allowed in enumerate(TELEBIRR_POSITIONS):
+        if i >= len(out) or out[i] in allowed:
+            continue
+        swap = {"O": "0", "0": "O", "I": "1", "1": "I", "S": "5", "5": "S"}.get(out[i])
+        if swap and swap in allowed:
+            out[i] = swap
+    return "".join(out)
+
+
+TB_RECEIPT = re.compile(r"(ethiotelecom\.et/receipt/)([A-Za-z0-9]+)", re.I)
+
+
+def repair_telebirr_link(url: str) -> str:
+    """The receipt link ends in the same token, and carries the same misread.
+
+    Repairing only the loose token would leave the link wrong and still
+    preferred, which is the worst outcome: a confident answer that fails at
+    the bank.
+    """
+    return TB_RECEIPT.sub(lambda m: m.group(1) + repair_telebirr(m.group(2).upper()), url)
+
+
+def plausible_telebirr(token: str) -> bool:
+    if len(token) != 10:
+        return True  # 12- and 16-character forms exist; only the common one is pinned down
+    return all(c in allowed for c, allowed in zip(token, TELEBIRR_POSITIONS))
+
+
 def plausible_cbe(token: str) -> bool:
     """The five digits after FT are a date, not a serial.
 
@@ -31,6 +84,8 @@ def plausible_cbe(token: str) -> bool:
     a misread: O in a digit slot, or a dropped character shifting the rest left.
     Rejecting it here costs a lookup we would have spent to learn the same thing.
     """
+    if len(token) != 12 or not set(token[7:]) <= CBE_TAIL_ALPHABET:
+        return False  # every real tail is five characters and holds no vowel
     year, day = int(token[2:4]), int(token[4:7])
     if not 1 <= day <= 366:
         return False
@@ -47,6 +102,8 @@ PROVIDERS = {
     "cbe": {
         "token": re.compile(r"\bFT\d{5}[A-Z0-9]{4,6}\b"),
         "valid": plausible_cbe,
+        "repair": repair_cbe,
+        "repair_link": None,
         "prefer": lambda t: len(t) == 12,
         "link": lambda host: host == "mbreciept.cbe.com.et",
         # CBE retired the host these key, so they are named but never offered.
@@ -58,7 +115,9 @@ PROVIDERS = {
         "token": re.compile(r"\b(?=[A-Z0-9]{10}\b)(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{10}\b"),
         "link": lambda host: host.endswith("ethiotelecom.et"),
         "legacy": None,
-        "valid": None,
+        "valid": plausible_telebirr,
+        "repair": repair_telebirr,
+        "repair_link": repair_telebirr_link,
         "prefer": None,
         "token_is_evidence": True,
     },
@@ -104,12 +163,18 @@ def extract(text: str, provider: str) -> dict:
     for url in URL_RE.findall(joined):
         host = host_of(url)
         if spec["link"](host):
+            if spec.get("repair_link"):
+                url = spec["repair_link"](url)
             links.append(url)
         elif spec["legacy"] and spec["legacy"](host):
             legacy.append(url)
 
     tokens = []
     for tok in spec["token"].findall(normalize(joined)):
+        # Repair before judging: the alphabet says which character was meant,
+        # so a reference is only impossible once that has been applied.
+        if spec.get("repair"):
+            tok = spec["repair"](tok)
         if tok in tokens:
             continue
         if spec.get("valid") and not spec["valid"](tok):

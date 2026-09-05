@@ -44,6 +44,11 @@ FIRST = ["ABEL", "GELILA", "LEWI", "SARON", "DAWIT", "HANA", "YONAS", "MERON", "
 LAST = ["GIRMA", "ABEBE", "HAILE", "TESFAYE", "BEKELE", "ALEMU", "KEBEDE", "WOLDE", "MENGISTU",
         "ASSEFA", "NEWAY", "DESTA", "TADESSE", "GEBRE", "MULUGETA"]
 ALNUM = string.ascii_uppercase + string.digits
+# Measured over 494 CBE and 524 telebirr messages off a real handset. Random
+# alphanumerics made a corpus that lies: it produced CBE tails full of vowels,
+# which CBE never issues, and so invented failures the box will never meet.
+CBE_TAIL = "0123456789BCDFGHJKLMNPQRSTVWXYZ"
+TB_POS = ["CD", "ABCDEFGHIJKL", "123456789ABCDEFGHIJKLMNOPQRSTUV", "0123456789"]
 
 
 def name():   return f"{random.choice(FIRST)} {random.choice(LAST)}"
@@ -57,14 +62,12 @@ def cbe_token(on: datetime.date) -> str:
     there. A corpus of random digits would be rejected as impossible dates by
     the very check it is meant to exercise.
     """
-    return f"FT{on.year % 100:02d}{on.timetuple().tm_yday:03d}" + "".join(random.choices(ALNUM, k=5))
+    return f"FT{on.year % 100:02d}{on.timetuple().tm_yday:03d}" + "".join(random.choices(CBE_TAIL, k=5))
 
 
 def tb_token():
-    while True:
-        t = "".join(random.choices(ALNUM, k=10))
-        if any(c.isdigit() for c in t) and any(c.isalpha() for c in t):
-            return t
+    """Four constrained positions then six free ones, as telebirr issues them."""
+    return "".join(random.choice(p) for p in TB_POS) + "".join(random.choices(ALNUM, k=6))
 
 
 def when():
