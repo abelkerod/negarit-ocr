@@ -239,7 +239,7 @@ async def run(
         engine = "tesseract"
 
     text = "\n".join(line["text"] for line in lines)
-    found = extract(text, provider) if provider else {"links": [], "tokens": [], "legacy": [], "reference": None}
+    found = extract(text, provider) if provider else {"links": [], "tokens": [], "legacy": [], "reference": None, "candidates": []}
     elapsed = round((time.perf_counter() - started) * 1000)
     archive(data, {
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -249,6 +249,8 @@ async def run(
         "bytes": len(data),
         "px": list(size) if size else None,
         "reference": found["reference"],
+        "candidates": found["candidates"],
+        "ambiguous": len(found["candidates"]) > 1,
         "tokens": found["tokens"],
         "lines": len(lines),
     })
@@ -259,6 +261,9 @@ async def run(
         "engine": engine,
         "provider": provider,
         "reference": found["reference"],
+        # More than one reading can satisfy the check digit, and the token
+        # cannot say which was printed. Best first; the caller asks the bank.
+        "candidates": found["candidates"],
         "links": found["links"],
         "tokens": found["tokens"],
         "legacy": found["legacy"],

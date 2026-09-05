@@ -99,6 +99,13 @@ def repair_telebirr_checksum(token: str) -> list[str]:
         if found:
             found.sort(key=lambda c: -sum(1 for i in slots if c[i] in PREFERRED))
             return found
+    # The check digit can be the character that was misread, and it cannot
+    # check itself. Rather than give up on the whole token, try it too.
+    swap = CONFUSABLE.get(token[3])
+    if swap and swap.isdigit():
+        candidate = token[:3] + swap + token[4:]
+        if telebirr_checksum_ok(candidate):
+            return [candidate]
     return []
 
 
@@ -168,6 +175,43 @@ def plausible_telebirr(token: str) -> bool:
     return on <= datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=1)
 
 
+PRINTED_DATE = re.compile(r"\b(20\d{2})[/-](\d{1,2})[/-](\d{1,2})\b")
+
+
+def printed_date(text: str) -> datetime.date | None:
+    """The transaction date the receipt prints next to the number."""
+    for match in PRINTED_DATE.finditer(text):
+        try:
+            return datetime.date(*(int(g) for g in match.groups()))
+        except ValueError:
+            continue
+    return None
+
+
+def reconcile_date(token: str, on: datetime.date | None) -> str:
+    """Make the token's own date agree with the one the receipt prints.
+
+    The check digit covers the counter, not the three characters in front of
+    it, and both S and 5 are legal days. So a day can be misread into another
+    day that is perfectly plausible, and only the receipt's own face says
+    otherwise.
+
+    Conservative on purpose: the token is changed only when one confusable
+    flip makes the two agree. A date OCR garbled never overrules a token that
+    was read correctly.
+    """
+    if on is None or len(token) != 10 or telebirr_date(token) == on:
+        return token
+    for i in (2, 1, 0):
+        swap = CONFUSABLE.get(token[i])
+        if not swap:
+            continue
+        candidate = token[:i] + swap + token[i + 1:]
+        if telebirr_date(candidate) == on:
+            return candidate
+    return token
+
+
 def repair_telebirr_date(token: str) -> str | None:
     """Fix a date the reader put in the future.
 
@@ -217,6 +261,7 @@ PROVIDERS = {
         "valid": plausible_cbe,
         "repair": repair_cbe,
         "checksum": None,
+        "reconcile": None,
         "dated": None,
         "repair_link": None,
         "prefer": lambda t: len(t) == 12,
@@ -233,6 +278,7 @@ PROVIDERS = {
         "valid": plausible_telebirr,
         "repair": repair_telebirr,
         "checksum": repair_telebirr_checksum,
+        "reconcile": reconcile_date,
         "dated": repair_telebirr_date,
         "repair_link": repair_telebirr_link,
         "prefer": None,
@@ -276,6 +322,10 @@ def extract(text: str, provider: str) -> dict:
         return {"links": [], "tokens": [], "legacy": [], "reference": None}
 
     joined = join_wrapped_urls(text)
+    # The receipt prints its own transaction date. Telebirr's number opens with
+    # that same date, and the check digit does not cover those characters, so
+    # this is the only thing that can tell one legal day from another.
+    on = printed_date(joined) if provider == "telebirr" else None
     links, legacy = [], []
     for url in URL_RE.findall(joined):
         host = host_of(url)
@@ -286,29 +336,44 @@ def extract(text: str, provider: str) -> dict:
         elif spec["legacy"] and spec["legacy"](host):
             legacy.append(url)
 
-    tokens = []
-    for tok in spec["token"].findall(normalize(joined)):
+    def settle(tok: str) -> str | None:
+        """The date checks, after the alphabet and the check digit have run."""
+        if spec.get("reconcile"):
+            tok = spec["reconcile"](tok, on)
+        if spec.get("dated"):
+            tok = spec["dated"](tok)
+            if not tok:
+                return None  # names a day that has not happened, and no flip fixes it
+        if spec.get("valid") and not spec["valid"](tok):
+            return None  # structurally impossible, so a misread rather than a miss
+        return tok
+
+    tokens: list[str] = []
+    alternates: list[str] = []
+    for raw in spec["token"].findall(normalize(joined)):
         # Repair before judging: the alphabet says which character was meant,
         # so a reference is only impossible once that has been applied.
-        if spec.get("repair"):
-            tok = spec["repair"](tok)
+        readings = [spec["repair"](raw)] if spec.get("repair") else [raw]
         if spec.get("checksum"):
-            fixed = spec["checksum"](tok)
-            if not fixed:
+            # More than one reading can satisfy the check digit. The token
+            # cannot say which was printed, so they are all carried forward.
+            readings = spec["checksum"](readings[0])
+            if not readings:
                 continue  # the check says this was misread and no flip restores it
-            tok = fixed[0]
-        if spec.get("dated"):
-            corrected = spec["dated"](tok)
-            if not corrected:
-                continue  # names a day that has not happened, and no flip fixes it
-            tok = corrected
-        if tok in tokens:
+        settled = [t for t in (settle(t) for t in readings) if t]
+        if not settled:
             continue
-        if spec.get("valid") and not spec["valid"](tok):
-            continue  # structurally impossible, so a misread rather than a miss
-        tokens.append(tok)
+        if settled[0] not in tokens:
+            tokens.append(settled[0])
+            if not alternates:
+                alternates = settled
     if spec.get("prefer"):
         tokens.sort(key=lambda t: not spec["prefer"](t))
 
     reference = links[0] if links else (tokens[0] if spec["token_is_evidence"] and tokens else None)
-    return {"links": links, "tokens": tokens, "legacy": legacy, "reference": reference}
+    # Where the check digit accepts two readings of the same characters, the
+    # token cannot say which was printed and neither can we. Both are offered
+    # so the caller can ask the bank, which is the only thing that knows.
+    candidates = alternates if (reference and not links) else ([reference] if reference else [])
+    return {"links": links, "tokens": tokens, "legacy": legacy, "reference": reference,
+            "candidates": candidates}

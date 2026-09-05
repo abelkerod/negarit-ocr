@@ -27,6 +27,10 @@ otherwise the bare token for providers that accept it. CBE does not — its FT
 number keys a retired endpoint — so a CBE receipt with no readable link
 answers `reference: null` and names the token in `tokens` anyway.
 
+`candidates` are the readings the check digit accepts, best first. Usually one.
+Where there are two, the token cannot say which was printed, so ask the bank
+about each in turn rather than guessing.
+
 `engine` says which read answered: `qr` when a barcode held a link, otherwise
 `tesseract`. Anything the QR carried is also the first line of `text`, so a
 caller that only reads `text` needs no change.
