@@ -8,3 +8,11 @@ dependencies = [
   "uvicorn>=0.30",
   "python-multipart>=0.0.9",
 ]
+
+# Only the regression suite needs these; the image builds with --no-dev.
+[dependency-groups]
+dev = [
+  "pillow>=10",
+  "qrcode>=7",
+  "requests>=2.31",
+]
